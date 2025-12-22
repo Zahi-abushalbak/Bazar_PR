@@ -1,4 +1,4 @@
-version: '3'
+version: '3.8'
 
 services:
   catalog_api:
@@ -6,15 +6,39 @@ services:
       context: ./catalog
     ports:
       - "5050:5000"
+    networks:
+      - app_network
 
   purchase_api:
     build:
       context: ./purchase
     ports:
       - "5060:5000"
+    networks:
+      - app_network
 
   gateway_api:
     build:
       context: ./gateway
     ports:
       - "8080:5000"
+    networks:
+      - app_network
+    depends_on:
+      - catalog_api
+      - purchase_api
+
+  load_balancer_api:
+    build:
+      context: ./loadbalancer
+    ports:
+      - "8090:4000"
+    networks:
+      - app_network
+    depends_on:
+      - catalog_api
+      - purchase_api
+
+networks:
+  app_network:
+    driver: bridge

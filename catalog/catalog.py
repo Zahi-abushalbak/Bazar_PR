@@ -1,9 +1,9 @@
 import sqlite3
 
+import requests
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-
 
 def get_db_connection():
     conn = sqlite3.connect('catalog.db')
@@ -11,62 +11,57 @@ def get_db_connection():
     return conn
 
 
+# Simulate replication
+other_replicas = ["http://localhost:5052"]  # Adjust for other replica instances
+
 @app.route('/query', methods=['GET'])
 def query_catalog_items():
     params = request.args
-    if len(params) == 0:
-        return jsonify({"message": "No query string found in the request"}), 400
-    elif params.keys().__contains__("topic"):
-        conn = get_db_connection()
-        topic = params["topic"]
-        query_res = conn.cursor().execute("SELECT * FROM catalog_item WHERE topic = ?", (topic,))
-        rows = query_res.fetchall()
-        if rows is None or len(rows) == 0:
-            return jsonify({"error": f"Something went wrong,make sure that topic {topic} exists"}), 404
-        return jsonify([{"id": row["ItemNumber"], "title": row["Name"]} for row in rows])
-    elif params.keys().__contains__("item_number"):
+    if "item_number" in params:
         conn = get_db_connection()
         item_number = params["item_number"]
-        query_res = conn.cursor().execute("SELECT * FROM catalog_item WHERE itemnumber = ?", (item_number,))
-        rows = query_res.fetchall()
-        if rows is None or len(rows) == 0:
-            return jsonify({"error": f"Something went wrong,make sure that item {item_number} exists"}), 404
-        return jsonify({"title": rows[0]["Name"], "quantity": rows[0]["Count"], "price": rows[0]["Cost"]}), 200
-
-    else:
-        return jsonify({"message": "Invalid query parameters"}), 400
+        query_res = conn.execute("SELECT * FROM catalog_item WHERE itemnumber = ?", (item_number,))
+        row = query_res.fetchone()
+        conn.close()
+        if row:
+            return jsonify({"title": row["Name"], "quantity": row["Count"], "price": row["Cost"]})
+        return jsonify({"error": "Item not found"}), 404
+    return jsonify({"error": "Invalid query parameters"}), 400
 
 
 @app.route('/update', methods=['PATCH'])
 def update_catalog_item():
     data = request.json
-    if data is None or not data:
-        return jsonify("Invalid request data")
+    if not data or "item_number" not in data:
+        return jsonify({"error": "Invalid data"}), 400
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    if data.keys().__contains__("item_number") and (
-            data.keys().__contains__("stock_count") or data.keys().__contains__("cost")):
+    item_number = data["item_number"]
 
-        if data.keys().__contains__("stock_count"):
-            stock_count = data["stock_count"]
-            item_number = data["item_number"]
+    if "stock_count" in data:
+        cursor.execute("UPDATE catalog_item SET count = count + ? WHERE itemnumber = ?",
+                       (data["stock_count"], item_number))
 
-            cursor.execute("UPDATE catalog_item SET count=  count + ? WHERE itemnumber = ?",
-                           (stock_count, item_number))
-            if cursor.rowcount == 0:
-                return jsonify({"error": f"Something went wrong,make sure that item {item_number} exists"}), 404
-            conn.commit()
-        if data.keys().__contains__("cost"):
-            cost = data["cost"]
-            item_number = data["item_number"]
-            cursor.execute("UPDATE catalog_item SET cost = ? WHERE itemnumber = ?", (cost, item_number))
-            if cursor.rowcount == 0:
-                return jsonify({"error": f"Something went wrong,make sure that item {item_number} exists"}), 404
-            conn.commit()
+    if "cost" in data:
+        cursor.execute("UPDATE catalog_item SET cost = ? WHERE itemnumber = ?",
+                       (data["cost"], item_number))
+
+    if cursor.rowcount > 0:
+        conn.commit()
+        conn.close()
+
+        # Propagate changes to replicas
+        for replica in other_replicas:
+            try:
+                requests.patch(replica + "/update", json=data)
+            except requests.RequestException as e:
+                print(f"Failed to update replica {replica}: {e}")
+
         return jsonify({"message": f"Updated record {item_number} successfully"}), 200
-    else:
-        return jsonify({"message": "Invalid request data or missing item number"}), 400
 
+    conn.close()
+    return jsonify({"error": f"Item {item_number} not found"}), 404
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5050)

@@ -1,16 +1,5 @@
-FROM ubuntu:latest
-
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip
-
+FROM python:3.9-slim
 WORKDIR /app
-
-COPY .. /app
-
-RUN pip3 install --break-system-packages flask requests
-
-
-EXPOSE 5000
-
-CMD ["python3", "purchase.py"]
+COPY purchase.py requirements.txt /app/
+RUN pip install -r requirements.txt
+CMD ["python", "purchase.py"]
